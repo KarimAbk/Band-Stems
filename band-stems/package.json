@@ -1,0 +1,9 @@
+{
+  "name": "band-stems",
+  "version": "1.0.0",
+  "description": "Synced multitrack stem player for band rehearsals",
+  "main": "server.js",
+  "scripts": { "start": "node server.js" },
+  "engines": { "node": ">=18" },
+  "dependencies": { "ws": "^8.18.0" }
+}

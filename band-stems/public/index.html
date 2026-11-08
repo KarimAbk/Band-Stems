@@ -1,0 +1,382 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Band Stems</title>
+<style>
+:root{--bg:#f6f5f2;--card:#fff;--tx:#1b1b1b;--mu:#6b6b6b;--ac:#d9480f;--bd:#e2e0da;--on:#fff;color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root{--bg:#141414;--card:#202020;--tx:#f0efec;--mu:#9a9a9a;--ac:#ff7a3d;--bd:#333;--on:#141414;color-scheme:dark}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:16px/1.4 system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:560px;margin:0 auto;padding:14px}
+h1{font-size:20px;margin:4px 0 12px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:14px;padding:12px;margin-bottom:12px}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+button,input[type=text]{font:inherit;color:var(--tx);background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:9px 12px}
+button.p{background:var(--ac);color:var(--on);border-color:var(--ac);font-weight:600}
+button.on{background:var(--ac);color:var(--on);border-color:var(--ac)}
+button:disabled{opacity:.4}
+input[type=range]{width:100%;accent-color:var(--ac)}
+.mu{color:var(--mu);font-size:13px}
+.stem{padding:8px 0;border-top:1px solid var(--bd)}
+.stem:first-child{border-top:0}
+.stem b{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+video{width:100%;border-radius:10px;background:#000;max-height:260px}
+#file{display:none}
+</style></head>
+<body><main>
+<h1>Band Stems</h1>
+
+<div class="card">
+  <div class="row"><button class="p" id="load">Load stems</button><span class="mu" id="lmsg">Host: pick the stems and they are shared automatically (mp3, m4a, wav, webm)</span></div>
+  <input type="file" id="file" accept="audio/*,.mp3,.wav,.m4a,.aac,.ogg,.flac,.webm" multiple>
+</div>
+
+<div class="card">
+  <div class="row">
+    <input type="text" id="code" placeholder="Room code" size="12" autocapitalize="none" autocomplete="off">
+    <button id="jh">Host</button><button id="jf">Join</button>
+    <span class="mu" id="rmsg">Not connected: playing solo</span>
+  </div>
+  <div class="mu" id="sync" style="margin-top:6px">Use a long, unguessable room code: anyone who knows it can join.</div>
+</div>
+
+<div class="card">
+  <div class="row"><button class="p" id="play" disabled>Play</button><button id="pause" disabled>Pause</button><span class="mu" id="time">0:00 / 0:00</span></div>
+  <input type="range" id="seek" min="0" max="1000" value="0" disabled>
+</div>
+
+<div class="card" id="mixer"><span class="mu">Your mixer appears here after you load stems. Levels are only for you.</span></div>
+
+<div class="card">
+  <div>Device delay: <b id="lv">0</b> ms</div>
+  <input type="range" id="lat" min="0" max="500" step="1" value="0">
+  <div class="row" style="margin-top:8px"><button id="clk">Play test clicks</button><span class="mu" id="clkmsg">Host only: everyone hears 8 clicks together</span></div>
+  <div class="mu">Device delay: set automatically by the host’s Auto-calibrate, or by hand. Remembered on this device.</div>
+  <div class="row" style="margin-top:8px"><button class="p" id="cal">Auto-calibrate</button><span class="mu" id="calmsg">Host only: devices close together, speakers on, quiet room</span></div>
+  <div style="margin-top:10px">Bluetooth extra delay: <b id="bv">0</b> ms</div>
+  <input type="range" id="bt" min="0" max="400" step="1" value="0">
+  <div class="mu">Only if you wear Bluetooth headphones: raise this until you play in time. Wired headphones need nothing.</div>
+</div>
+
+<div class="card">
+  <video id="cam" playsinline muted></video>
+  <div class="row" style="margin-top:8px">
+    <button id="cambtn">Start camera</button><button class="p" id="rec" disabled>Record</button><button id="save" disabled>Save video</button>
+  </div>
+  <div class="mu" id="recmsg">Records only your camera and mic, not the backing track. Use headphones.</div>
+</div>
+</main>
+<script>
+const $=s=>document.querySelector(s);
+let ctx,stems=[],playing=false,startCtx=0,startPos=0,dur=0,latency=0,keep;
+let myCid=-1,calibInfo=null,extra=0;
+const lat=()=>(latency+extra)/1000;
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+let hostFiles=[],needUpload=false,token='',stemsV=-1;
+let ws=null,joined=false,isHost=false,code='',offset=0,samples=[];
+const fmt=s=>Math.floor(s/60)+':'+String(Math.floor(s%60)).padStart(2,'0');
+const srvNow=()=>Date.now()+offset;
+const canCtl=()=>!joined||isHost;
+
+function ensureCtx(){
+  try{if(navigator.audioSession)navigator.audioSession.type='playback'}catch(e){}
+  if(!ctx)ctx=new (window.AudioContext||window.webkitAudioContext)();
+  if(!keep){try{
+    const n=800,b=new Uint8Array(44+n),v=new DataView(b.buffer);
+    const w=(o,s)=>[...s].forEach((c,i)=>v.setUint8(o+i,c.charCodeAt(0)));
+    w(0,'RIFF');v.setUint32(4,36+n,true);w(8,'WAVEfmt ');v.setUint32(16,16,true);v.setUint16(20,1,true);v.setUint16(22,1,true);v.setUint32(24,8000,true);v.setUint32(28,16000,true);v.setUint16(32,2,true);v.setUint16(34,16,true);w(36,'data');v.setUint32(40,n,true);
+    keep=new Audio('data:audio/wav;base64,'+btoa(String.fromCharCode(...b)));keep.loop=true;keep.play().catch(()=>{});
+  }catch(e){}}
+  return ctx.state!=='running'?ctx.resume():Promise.resolve();
+}
+try{navigator.wakeLock&&navigator.wakeLock.request('screen').catch(()=>{})}catch(e){}
+
+// ---------- stems ----------
+$('#load').onclick=()=>{ensureCtx();$('#file').click()};
+$('#file').onchange=async e=>{
+  ensureCtx();stop();
+  const files=[...e.target.files];if(!files.length)return;
+  $('#lmsg').textContent='Decoding…';
+  stems.forEach(s=>s.gain.disconnect());stems=[];
+  const bad=[],good=[];
+  for(const f of files){
+    try{
+      const ab=await f.arrayBuffer();
+      const buf=await new Promise((ok,no)=>{const p=ctx.decodeAudioData(ab,ok,no);if(p&&p.catch)p.catch(no)});
+      const gain=ctx.createGain();gain.connect(ctx.destination);
+      stems.push({name:f.name.replace(/\.[^.]+$/,''),buf,gain,vol:1,mute:false,solo:false,src:null});good.push(f);
+    }catch(err){bad.push(f.name)}
+  }
+  e.target.value='';
+  if(!stems.length){$('#lmsg').textContent='Could not read: '+bad.join(', ')+'. Try converting to wav or m4a.';return}
+  dur=Math.max(...stems.map(s=>s.buf.duration));startPos=0;playing=false;
+  $('#lmsg').textContent=stems.length+' stems loaded'+(bad.length?' (skipped: '+bad.join(', ')+')':'');
+  renderMixer();updateUI();
+  hostFiles=good;needUpload=true;share();
+};
+function renderMixer(){
+  const m=$('#mixer');m.innerHTML='';
+  stems.forEach(s=>{
+    const d=document.createElement('div');d.className='stem';
+    d.innerHTML='<div class="row"><b></b><button class="m">Mute</button><button class="s">Solo</button></div><input type="range" min="0" max="100" value="100">';
+    d.querySelector('b').textContent=s.name;
+    d.querySelector('input').oninput=e=>{s.vol=e.target.value/100;gains()};
+    d.querySelector('.m').onclick=e=>{s.mute=!s.mute;e.target.classList.toggle('on',s.mute);gains()};
+    d.querySelector('.s').onclick=e=>{s.solo=!s.solo;e.target.classList.toggle('on',s.solo);gains()};
+    m.appendChild(d);
+  });
+}
+function gains(){
+  const any=stems.some(s=>s.solo);
+  stems.forEach(s=>{const g=s.mute?0:(any&&!s.solo?0:s.vol);s.gain.gain.setTargetAtTime(g,ctx.currentTime,.01)});
+}
+
+// ---------- transport ----------
+function curPos(){return playing?Math.min(dur,Math.max(startPos,startPos+(ctx.currentTime-startCtx))):startPos}
+function stop(){stems.forEach(s=>{if(s.src){try{s.src.stop()}catch(e){}s.src=null}})}
+function startAt(localMs,pos){
+  if(!stems.length)return;
+  ensureCtx();stop();gains();
+  let delay=(localMs-Date.now())/1000,off=pos+lat();
+  if(delay<0){off-=delay;delay=0}
+  if(off>=dur){playing=false;startPos=0;updateUI();return}
+  const t=ctx.currentTime+delay;
+  stems.forEach(s=>{
+    if(off>=s.buf.duration)return;
+    const src=ctx.createBufferSource();src.buffer=s.buf;src.connect(s.gain);src.start(t,off);s.src=src;
+  });
+  startCtx=t;startPos=off-lat();playing=true;updateUI();
+}
+function pauseAt(pos){stop();playing=false;startPos=pos;updateUI()}
+function clicks(at){
+  if(!ctx)return;
+  for(let i=0;i<8;i++){
+    const t=ctx.currentTime+(at-offset+i*1000-Date.now())/1000-lat();
+    if(t<=ctx.currentTime)continue;
+    const o=ctx.createOscillator(),g=ctx.createGain();
+    o.frequency.value=i===0?1500:1000;g.gain.setValueAtTime(.6,t);g.gain.exponentialRampToValueAtTime(.001,t+.06);
+    o.connect(g);g.connect(ctx.destination);o.start(t);o.stop(t+.08);
+  }
+}
+function handle(m){
+  if(m.a==='click'){ensureCtx();clicks(m.at);return}
+  if(m.a==='calib'){calibInfo=m;ensureCtx();playCalib(m);return}
+  if(m.a==='setlat'){if(m.ms&&m.ms[myCid]!==undefined){setLat(m.ms[myCid]);$('#calmsg').textContent='Calibrated by the host: your delay is '+latency+' ms'}return}
+  if(m.a==='play')startAt(m.at-offset,m.pos);
+  else if(m.a==='pause')pauseAt(m.pos);
+  else if(m.a==='seek'&&!playing){startPos=m.pos;updateUI()}
+}
+function send(msg){
+  if(joined&&ws&&ws.readyState===1)ws.send(JSON.stringify({t:'tx',...msg}));
+  else handle(msg);
+}
+$('#play').onclick=async()=>{await ensureCtx();send({a:'play',at:srvNow()+800,pos:curPos()})};
+$('#pause').onclick=()=>send({a:'pause',pos:curPos()});
+$('#seek').onchange=e=>{
+  const pos=e.target.value/1000*dur;
+  send(playing?{a:'play',at:srvNow()+800,pos}:{a:'seek',pos});
+};
+$('#clk').onclick=async()=>{await ensureCtx();send({a:'click',at:srvNow()+1000})};
+function setLat(v){latency=Math.max(0,Math.min(500,Math.round(v)));$('#lat').value=latency;$('#lv').textContent=latency;try{localStorage.setItem('bs-lat',latency)}catch(x){}}
+function relat(){if(playing)startAt(Date.now()+50,curPos())}
+$('#lat').oninput=e=>{setLat(+e.target.value);relat()};
+$('#bt').oninput=e=>{extra=+e.target.value;$('#bv').textContent=extra;try{localStorage.setItem('bs-bt',extra)}catch(x){}relat()};
+$('#cal').onclick=calibrate;
+function updateUI(){
+  const has=stems.length>0,c=canCtl();
+  $('#play').disabled=!has||!c||playing;$('#pause').disabled=!has||!c||!playing;$('#seek').disabled=!has||!c;
+  $('#cal').style.display=(joined&&isHost)?'':'none';
+  $('#clk').style.display=c?'':'none';$('#clkmsg').style.display=c?'':'none';
+  $('#play').style.display=c?'':'none';$('#pause').style.display=c?'':'none';
+}
+setInterval(()=>{
+  if(!dur)return;
+  const p=curPos();
+  if(playing&&p>=dur){playing=false;startPos=0;stop();updateUI()}
+  $('#time').textContent=fmt(p)+' / '+fmt(dur);
+  if(document.activeElement!==$('#seek'))$('#seek').value=p/dur*1000;
+},200);
+
+// ---------- connection + clock sync (against the server clock) ----------
+function open(){
+  ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host);
+  ws.onopen=()=>{ws.send(JSON.stringify({t:'join',room:code,host:isHost}));burst()};
+  ws.onmessage=e=>{
+    let m;try{m=JSON.parse(e.data)}catch(x){return}
+    if(m.t==='pong'){
+      const t3=Date.now();
+      samples.push({rtt:t3-m.t0,off:m.ts-(m.t0+t3)/2});
+      samples=samples.slice(-10);
+      const b=samples.reduce((a,s)=>s.rtt<a.rtt?s:a);
+      offset=b.off;
+      $('#sync').textContent='Clock synced (round trip '+b.rtt+' ms)';
+    }else if(m.t==='tx')handle(m);
+    else if(m.t==='stems')loadRemote(m);
+    else if(m.t==='joined'){joined=true;myCid=m.cid;if(m.host){token=m.token;share()}$('#rmsg').textContent=(m.host?'Hosting ':'Joined ')+m.code;updateUI()}
+    else if(m.t==='peers')$('#rmsg').textContent=(isHost?'Hosting ':'Joined ')+code+' · '+m.n+' here'+(m.host?'':' · no host yet');
+  };
+  ws.onclose=()=>{
+    if(!code)return;
+    $('#rmsg').textContent='Reconnecting…';
+    setTimeout(open,2000);
+  };
+}
+function burst(){
+  for(let i=0;i<6;i++)setTimeout(()=>{if(ws&&ws.readyState===1)ws.send(JSON.stringify({t:'ping',t0:Date.now()}))},i*200);
+}
+setInterval(()=>{if(joined)burst()},15000);
+function connect(host){
+  const c=$('#code').value.trim().toLowerCase().replace(/[^a-z0-9_-]/g,'');
+  if(!c){$('#rmsg').textContent='Enter a room code first';return}
+  code=c;isHost=host;ensureCtx();
+  $('#jh').disabled=$('#jf').disabled=$('#code').disabled=true;
+  $('#rmsg').textContent='Connecting…';
+  open();
+}
+$('#jh').onclick=()=>connect(true);
+$('#jf').onclick=()=>connect(false);
+
+// ---------- automatic calibration: the host listens, every device clicks in turn ----------
+const SLOT=1500,ROUNDS=3;
+function beep(t){
+  const o=ctx.createOscillator(),g=ctx.createGain();
+  o.frequency.value=1800;g.gain.setValueAtTime(1,t);g.gain.exponentialRampToValueAtTime(.001,t+.04);
+  o.connect(g);g.connect(ctx.destination);o.start(t);o.stop(t+.06);
+}
+function playCalib(m){
+  const slot=m.ids.indexOf(myCid),n=m.ids.length;
+  if(slot<0)return;
+  for(let r=0;r<ROUNDS;r++){
+    const local=m.at+(r*n+slot)*SLOT-offset;
+    const t=ctx.currentTime+(local-Date.now())/1000;
+    if(t>ctx.currentTime)beep(t); // raw: no compensation, so we measure the true delay
+  }
+}
+const median=a=>{const b=[...a].sort((x,y)=>x-y);return b[Math.floor(b.length/2)]};
+async function calibrate(){
+  const cm=t=>$('#calmsg').textContent=t;
+  if(!joined||!isHost)return;
+  if(playing){cm('Pause the music first.');return}
+  await ensureCtx();
+  let ms;
+  try{ms=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false}})}
+  catch(e){cm('Microphone permission denied (needed on the host only).');return}
+  const src=ctx.createMediaStreamSource(ms),sp=ctx.createScriptProcessor(2048,1,1),mute=ctx.createGain();
+  mute.gain.value=0;
+  const chunks=[];let R0=0,total=0;
+  sp.onaudioprocess=e=>{
+    if(!R0)R0=Date.now()-e.inputBuffer.duration*1000;
+    const c=new Float32Array(e.inputBuffer.getChannelData(0));chunks.push(c);total+=c.length;
+  };
+  src.connect(sp);sp.connect(mute);mute.connect(ctx.destination);
+  cm('Listening… keep quiet, devices close, speakers on.');
+  calibInfo=null;
+  ws.send(JSON.stringify({t:'tx',a:'calib',at:srvNow()+1500}));
+  await sleep(400);
+  const info=calibInfo;
+  if(!info){cm('No answer from the server. Try again.');ms.getTracks().forEach(t=>t.stop());return}
+  const n=info.ids.length;
+  await sleep(1500+ROUNDS*n*SLOT+800);
+  ms.getTracks().forEach(t=>t.stop());sp.disconnect();src.disconnect();mute.disconnect();
+  const all=new Float32Array(total);let o=0;for(const c of chunks){all.set(c,o);o+=c.length}
+  const sr=ctx.sampleRate,E=info.ids.map(()=>[]);
+  for(let r=0;r<ROUNDS;r++)for(let k=0;k<n;k++){
+    const T=info.at+(r*n+k)*SLOT;
+    const g=Math.round((T-offset-R0)/1000*sr);
+    const a=Math.max(0,g-Math.round(.4*sr)),b=Math.min(all.length,g+Math.round(1*sr));
+    let peak=0;for(let i=a;i<b;i++){const v=Math.abs(all[i]);if(v>peak)peak=v}
+    if(peak<.03)continue;
+    let i=a;while(i<b&&Math.abs(all[i])<.35*peak)i++;
+    E[k].push(i/sr*1000-T);
+  }
+  if(!E[0].length){cm('The host could not hear its own click. Turn the volume up and try again.');return}
+  const base=median(E[0]),d=[0],heard=[0];
+  for(let k=1;k<n;k++){if(E[k].length){d[k]=median(E[k])-base;heard.push(k)}else d[k]=null}
+  const lo=Math.min(...heard.map(k=>d[k]));
+  const out={};let txt=[];
+  heard.forEach(k=>{const v=Math.round(d[k]-lo);out[info.ids[k]]=v;txt.push(v+' ms')});
+  const missing=n-heard.length;
+  ws.send(JSON.stringify({t:'tx',a:'setlat',ms:out}));
+  cm('Calibrated '+heard.length+' device(s): '+txt.join(', ')+(missing?'. '+missing+' not heard: move closer and retry.':'. Tap Play test clicks to check.'));
+}
+
+// ---------- sharing stems through the server (host uploads, others download) ----------
+const MB=1048576;
+async function share(){
+  if(!joined||!isHost||!needUpload||!hostFiles.length)return;
+  needUpload=false;
+  const total=hostFiles.reduce((a,f)=>a+f.size,0);
+  if(total>200*MB){$('#lmsg').textContent='Over the 200 MB room limit ('+Math.round(total/MB)+' MB), so not shared. Use mp3 or m4a files.';return}
+  const big=hostFiles.find(f=>f.size>95*MB);
+  if(big){$('#lmsg').textContent=big.name+' is over 95 MB, so not shared. Compress it (mp3 or m4a).';return}
+  try{
+    $('#lmsg').textContent='Sharing with the room…';
+    let r=await fetch('/clear?room='+code,{method:'POST',headers:{'x-token':token}});
+    if(!r.ok)throw new Error(r.status);
+    for(let i=0;i<hostFiles.length;i++){
+      const f=hostFiles[i];
+      $('#lmsg').textContent='Sharing '+(i+1)+'/'+hostFiles.length+'…';
+      r=await fetch('/upload?room='+code,{method:'POST',headers:{'x-token':token,'x-name':encodeURIComponent(f.name),'Content-Type':f.type||'application/octet-stream'},body:f});
+      if(!r.ok)throw new Error(r.status);
+    }
+    ws.send(JSON.stringify({t:'publish'}));
+    $('#lmsg').textContent=stems.length+' stems loaded and shared with the room';
+  }catch(e){
+    needUpload=true;
+    $('#lmsg').textContent='Sharing failed ('+(e.message==='413'?'over the room limit':'check your connection')+'). Load the stems again to retry.';
+  }
+}
+async function loadRemote(msg){
+  if(isHost||msg.v===stemsV)return;
+  stemsV=msg.v;ensureCtx();stop();playing=false;
+  const next=[];
+  try{
+    for(let i=0;i<msg.files.length;i++){
+      const f=msg.files[i];
+      $('#lmsg').textContent='Downloading '+(i+1)+'/'+msg.files.length+': '+f.name;
+      const r=await fetch('/f/'+code+'/'+f.id);
+      if(!r.ok)throw new Error(r.status);
+      const ab=await r.arrayBuffer();
+      const buf=await new Promise((ok,no)=>{const p=ctx.decodeAudioData(ab,ok,no);if(p&&p.catch)p.catch(no)});
+      const gain=ctx.createGain();gain.connect(ctx.destination);
+      next.push({name:f.name.replace(/\.[^.]+$/,''),buf,gain,vol:1,mute:false,solo:false,src:null});
+    }
+  }catch(e){stemsV=-1;$('#lmsg').textContent='Download failed. Ask the host to load the stems again.';return}
+  stems.forEach(s=>s.gain.disconnect());stems=next;
+  dur=Math.max(...stems.map(s=>s.buf.duration));startPos=0;playing=false;
+  $('#lmsg').textContent=stems.length+' stems received from the host';
+  renderMixer();updateUI();
+  if(ws&&ws.readyState===1)ws.send(JSON.stringify({t:'catchup'}));
+}
+
+// ---------- camera + mic recording ----------
+let stream,mr,chunks=[],blob=null;
+$('#cambtn').onclick=async()=>{
+  try{
+    stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'user'},audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false}});
+    $('#cam').srcObject=stream;$('#cam').play();$('#rec').disabled=false;$('#cambtn').disabled=true;
+  }catch(e){$('#recmsg').textContent='Camera or mic permission was denied (this needs https).'}
+};
+$('#rec').onclick=()=>{
+  if(mr&&mr.state==='recording'){mr.stop();return}
+  const mime=['video/mp4','video/webm;codecs=vp9,opus','video/webm'].find(t=>window.MediaRecorder&&MediaRecorder.isTypeSupported(t))||'';
+  chunks=[];blob=null;$('#save').disabled=true;
+  mr=new MediaRecorder(stream,mime?{mimeType:mime}:undefined);
+  mr.ondataavailable=e=>e.data.size&&chunks.push(e.data);
+  mr.onstop=()=>{blob=new Blob(chunks,{type:mr.mimeType});$('#rec').textContent='Record';$('#save').disabled=false;$('#recmsg').textContent='Recorded '+Math.round(blob.size/1e5)/10+' MB. Save it to your phone.'};
+  mr.start();$('#rec').textContent='Stop';$('#recmsg').textContent='Recording…';
+};
+$('#save').onclick=async()=>{
+  if(!blob)return;
+  const ext=blob.type.includes('mp4')?'mp4':'webm';
+  const name='take-'+new Date().toISOString().slice(0,19).replace(/[:T]/g,'-')+'.'+ext;
+  const file=new File([blob],name,{type:blob.type});
+  if(navigator.canShare&&navigator.canShare({files:[file]})){
+    try{await navigator.share({files:[file]});return}catch(e){if(e.name==='AbortError')return}
+  }
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;document.body.appendChild(a);a.click();a.remove();
+};
+try{const v=+localStorage.getItem('bs-lat');if(v)setLat(v);const b=+localStorage.getItem('bs-bt');if(b){extra=b;$('#bt').value=b;$('#bv').textContent=b}}catch(e){}
+updateUI();
+</script>
+</body></html>
