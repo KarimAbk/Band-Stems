@@ -49,8 +49,9 @@ video{width:100%;border-radius:10px;background:#000;max-height:260px}
 
 <div class="card">
   <div>Bluetooth latency: <b id="lv">0</b> ms</div>
-  <input type="range" id="lat" min="0" max="400" step="5" value="0">
-  <div class="mu">Wired headphones: leave at 0. Bluetooth: raise it until you play in time.</div>
+  <input type="range" id="lat" min="0" max="500" step="1" value="0">
+  <div class="row" style="margin-top:8px"><button id="clk">Play test clicks</button><span class="mu" id="clkmsg">Host only: everyone hears 8 clicks together</span></div>
+  <div class="mu">Each device has its own delay. Host plays the test clicks; on the device that sounds late, raise this until the clicks line up. It is remembered on this device.</div>
 </div>
 
 <div class="card">
@@ -64,6 +65,7 @@ video{width:100%;border-radius:10px;background:#000;max-height:260px}
 <script>
 const $=s=>document.querySelector(s);
 let ctx,stems=[],playing=false,startCtx=0,startPos=0,dur=0,latency=0,keep;
+const lat=()=>(latency+(ctx&&ctx.outputLatency?ctx.outputLatency*1000:0))/1000;
 let hostFiles=[],needUpload=false,token='',stemsV=-1;
 let ws=null,joined=false,isHost=false,code='',offset=0,samples=[];
 const fmt=s=>Math.floor(s/60)+':'+String(Math.floor(s%60)).padStart(2,'0');
@@ -129,7 +131,7 @@ function stop(){stems.forEach(s=>{if(s.src){try{s.src.stop()}catch(e){}s.src=nul
 function startAt(localMs,pos){
   if(!stems.length)return;
   ensureCtx();stop();gains();
-  let delay=(localMs-Date.now())/1000,off=pos+latency/1000;
+  let delay=(localMs-Date.now())/1000,off=pos+lat();
   if(delay<0){off-=delay;delay=0}
   if(off>=dur){playing=false;startPos=0;updateUI();return}
   const t=ctx.currentTime+delay;
@@ -137,10 +139,21 @@ function startAt(localMs,pos){
     if(off>=s.buf.duration)return;
     const src=ctx.createBufferSource();src.buffer=s.buf;src.connect(s.gain);src.start(t,off);s.src=src;
   });
-  startCtx=t;startPos=off-latency/1000;playing=true;updateUI();
+  startCtx=t;startPos=off-lat();playing=true;updateUI();
 }
 function pauseAt(pos){stop();playing=false;startPos=pos;updateUI()}
+function clicks(at){
+  if(!ctx)return;
+  for(let i=0;i<8;i++){
+    const t=ctx.currentTime+(at-offset+i*1000-Date.now())/1000-lat();
+    if(t<=ctx.currentTime)continue;
+    const o=ctx.createOscillator(),g=ctx.createGain();
+    o.frequency.value=i===0?1500:1000;g.gain.setValueAtTime(.6,t);g.gain.exponentialRampToValueAtTime(.001,t+.06);
+    o.connect(g);g.connect(ctx.destination);o.start(t);o.stop(t+.08);
+  }
+}
 function handle(m){
+  if(m.a==='click'){ensureCtx();clicks(m.at);return}
   if(m.a==='play')startAt(m.at-offset,m.pos);
   else if(m.a==='pause')pauseAt(m.pos);
   else if(m.a==='seek'&&!playing){startPos=m.pos;updateUI()}
@@ -155,13 +168,15 @@ $('#seek').onchange=e=>{
   const pos=e.target.value/1000*dur;
   send(playing?{a:'play',at:srvNow()+800,pos}:{a:'seek',pos});
 };
+$('#clk').onclick=async()=>{await ensureCtx();send({a:'click',at:srvNow()+1000})};
 $('#lat').oninput=e=>{
-  latency=+e.target.value;$('#lv').textContent=latency;
+  latency=+e.target.value;$('#lv').textContent=latency;try{localStorage.setItem('bs-lat',latency)}catch(x){}
   if(playing)startAt(Date.now()+50,curPos());
 };
 function updateUI(){
   const has=stems.length>0,c=canCtl();
   $('#play').disabled=!has||!c||playing;$('#pause').disabled=!has||!c||!playing;$('#seek').disabled=!has||!c;
+  $('#clk').style.display=c?'':'none';$('#clkmsg').style.display=c?'':'none';
   $('#play').style.display=c?'':'none';$('#pause').style.display=c?'':'none';
 }
 setInterval(()=>{
@@ -287,6 +302,7 @@ $('#save').onclick=async()=>{
   }
   const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;document.body.appendChild(a);a.click();a.remove();
 };
+try{const v=+localStorage.getItem('bs-lat');if(v){latency=v;$('#lat').value=v;$('#lv').textContent=v}}catch(e){}
 updateUI();
 </script>
 </body></html>

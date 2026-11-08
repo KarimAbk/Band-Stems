@@ -101,7 +101,7 @@ wss.on('connection', ws => {
     if (m.t === 'tx') {
       if (m.a === 'play') room.state = { playing: true, at: m.at, pos: m.pos };
       else if (m.a === 'pause' || m.a === 'seek') room.state = { playing: false, pos: m.pos };
-      else return;
+      else if(m.a!=='click')return;
       room.clients.forEach(c => send(c, { t: 'tx', a: m.a, at: m.at, pos: m.pos }));
     }
   });
