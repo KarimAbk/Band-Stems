@@ -81,8 +81,9 @@ wss.on('connection', ws => {
         if (r.host && r.host !== ws) { r.clients.delete(r.host); r.host.close(); }
         r.host = ws; isHost = true; r.token = crypto.randomBytes(12).toString('hex');
       }
+      ws.cid = (r.nextId = (r.nextId || 0) + 1);
       room = r; r.clients.add(ws);
-      send(ws, { t: 'joined', host: isHost, code, token: isHost ? r.token : undefined });
+      send(ws, { t: 'joined', host: isHost, code, cid: ws.cid, token: isHost ? r.token : undefined });
       if (!isHost) { if (r.published) send(ws, stemsMsg(r)); catchUp(ws, r); }
       announce(r);
       return;
@@ -99,10 +100,12 @@ wss.on('connection', ws => {
     }
 
     if (m.t === 'tx') {
+      let ids;
       if (m.a === 'play') room.state = { playing: true, at: m.at, pos: m.pos };
       else if (m.a === 'pause' || m.a === 'seek') room.state = { playing: false, pos: m.pos };
-      else if(m.a!=='click')return;
-      room.clients.forEach(c => send(c, { t: 'tx', a: m.a, at: m.at, pos: m.pos }));
+      else if (m.a === 'calib') ids = [ws.cid, ...[...room.clients].filter(c => c !== ws).map(c => c.cid)];
+      else if (m.a !== 'click' && m.a !== 'setlat') return;
+      room.clients.forEach(c => send(c, { t: 'tx', a: m.a, at: m.at, pos: m.pos, ids, ms: m.ms }));
     }
   });
 

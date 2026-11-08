@@ -48,10 +48,14 @@ video{width:100%;border-radius:10px;background:#000;max-height:260px}
 <div class="card" id="mixer"><span class="mu">Your mixer appears here after you load stems. Levels are only for you.</span></div>
 
 <div class="card">
-  <div>Bluetooth latency: <b id="lv">0</b> ms</div>
+  <div>Device delay: <b id="lv">0</b> ms</div>
   <input type="range" id="lat" min="0" max="500" step="1" value="0">
   <div class="row" style="margin-top:8px"><button id="clk">Play test clicks</button><span class="mu" id="clkmsg">Host only: everyone hears 8 clicks together</span></div>
-  <div class="mu">Each device has its own delay. Host plays the test clicks; on the device that sounds late, raise this until the clicks line up. It is remembered on this device.</div>
+  <div class="mu">Device delay: set automatically by the host’s Auto-calibrate, or by hand. Remembered on this device.</div>
+  <div class="row" style="margin-top:8px"><button class="p" id="cal">Auto-calibrate</button><span class="mu" id="calmsg">Host only: devices close together, speakers on, quiet room</span></div>
+  <div style="margin-top:10px">Bluetooth extra delay: <b id="bv">0</b> ms</div>
+  <input type="range" id="bt" min="0" max="400" step="1" value="0">
+  <div class="mu">Only if you wear Bluetooth headphones: raise this until you play in time. Wired headphones need nothing.</div>
 </div>
 
 <div class="card">
@@ -65,7 +69,9 @@ video{width:100%;border-radius:10px;background:#000;max-height:260px}
 <script>
 const $=s=>document.querySelector(s);
 let ctx,stems=[],playing=false,startCtx=0,startPos=0,dur=0,latency=0,keep;
-const lat=()=>(latency+(ctx&&ctx.outputLatency?ctx.outputLatency*1000:0))/1000;
+let myCid=-1,calibInfo=null,extra=0;
+const lat=()=>(latency+extra)/1000;
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 let hostFiles=[],needUpload=false,token='',stemsV=-1;
 let ws=null,joined=false,isHost=false,code='',offset=0,samples=[];
 const fmt=s=>Math.floor(s/60)+':'+String(Math.floor(s%60)).padStart(2,'0');
@@ -154,6 +160,8 @@ function clicks(at){
 }
 function handle(m){
   if(m.a==='click'){ensureCtx();clicks(m.at);return}
+  if(m.a==='calib'){calibInfo=m;ensureCtx();playCalib(m);return}
+  if(m.a==='setlat'){if(m.ms&&m.ms[myCid]!==undefined){setLat(m.ms[myCid]);$('#calmsg').textContent='Calibrated by the host: your delay is '+latency+' ms'}return}
   if(m.a==='play')startAt(m.at-offset,m.pos);
   else if(m.a==='pause')pauseAt(m.pos);
   else if(m.a==='seek'&&!playing){startPos=m.pos;updateUI()}
@@ -169,13 +177,15 @@ $('#seek').onchange=e=>{
   send(playing?{a:'play',at:srvNow()+800,pos}:{a:'seek',pos});
 };
 $('#clk').onclick=async()=>{await ensureCtx();send({a:'click',at:srvNow()+1000})};
-$('#lat').oninput=e=>{
-  latency=+e.target.value;$('#lv').textContent=latency;try{localStorage.setItem('bs-lat',latency)}catch(x){}
-  if(playing)startAt(Date.now()+50,curPos());
-};
+function setLat(v){latency=Math.max(0,Math.min(500,Math.round(v)));$('#lat').value=latency;$('#lv').textContent=latency;try{localStorage.setItem('bs-lat',latency)}catch(x){}}
+function relat(){if(playing)startAt(Date.now()+50,curPos())}
+$('#lat').oninput=e=>{setLat(+e.target.value);relat()};
+$('#bt').oninput=e=>{extra=+e.target.value;$('#bv').textContent=extra;try{localStorage.setItem('bs-bt',extra)}catch(x){}relat()};
+$('#cal').onclick=calibrate;
 function updateUI(){
   const has=stems.length>0,c=canCtl();
   $('#play').disabled=!has||!c||playing;$('#pause').disabled=!has||!c||!playing;$('#seek').disabled=!has||!c;
+  $('#cal').style.display=(joined&&isHost)?'':'none';
   $('#clk').style.display=c?'':'none';$('#clkmsg').style.display=c?'':'none';
   $('#play').style.display=c?'':'none';$('#pause').style.display=c?'':'none';
 }
@@ -202,7 +212,7 @@ function open(){
       $('#sync').textContent='Clock synced (round trip '+b.rtt+' ms)';
     }else if(m.t==='tx')handle(m);
     else if(m.t==='stems')loadRemote(m);
-    else if(m.t==='joined'){joined=true;if(m.host){token=m.token;share()}$('#rmsg').textContent=(m.host?'Hosting ':'Joined ')+m.code;updateUI()}
+    else if(m.t==='joined'){joined=true;myCid=m.cid;if(m.host){token=m.token;share()}$('#rmsg').textContent=(m.host?'Hosting ':'Joined ')+m.code;updateUI()}
     else if(m.t==='peers')$('#rmsg').textContent=(isHost?'Hosting ':'Joined ')+code+' · '+m.n+' here'+(m.host?'':' · no host yet');
   };
   ws.onclose=()=>{
@@ -225,6 +235,70 @@ function connect(host){
 }
 $('#jh').onclick=()=>connect(true);
 $('#jf').onclick=()=>connect(false);
+
+// ---------- automatic calibration: the host listens, every device clicks in turn ----------
+const SLOT=1500,ROUNDS=3;
+function beep(t){
+  const o=ctx.createOscillator(),g=ctx.createGain();
+  o.frequency.value=1800;g.gain.setValueAtTime(1,t);g.gain.exponentialRampToValueAtTime(.001,t+.04);
+  o.connect(g);g.connect(ctx.destination);o.start(t);o.stop(t+.06);
+}
+function playCalib(m){
+  const slot=m.ids.indexOf(myCid),n=m.ids.length;
+  if(slot<0)return;
+  for(let r=0;r<ROUNDS;r++){
+    const local=m.at+(r*n+slot)*SLOT-offset;
+    const t=ctx.currentTime+(local-Date.now())/1000;
+    if(t>ctx.currentTime)beep(t); // raw: no compensation, so we measure the true delay
+  }
+}
+const median=a=>{const b=[...a].sort((x,y)=>x-y);return b[Math.floor(b.length/2)]};
+async function calibrate(){
+  const cm=t=>$('#calmsg').textContent=t;
+  if(!joined||!isHost)return;
+  if(playing){cm('Pause the music first.');return}
+  await ensureCtx();
+  let ms;
+  try{ms=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false}})}
+  catch(e){cm('Microphone permission denied (needed on the host only).');return}
+  const src=ctx.createMediaStreamSource(ms),sp=ctx.createScriptProcessor(2048,1,1),mute=ctx.createGain();
+  mute.gain.value=0;
+  const chunks=[];let R0=0,total=0;
+  sp.onaudioprocess=e=>{
+    if(!R0)R0=Date.now()-e.inputBuffer.duration*1000;
+    const c=new Float32Array(e.inputBuffer.getChannelData(0));chunks.push(c);total+=c.length;
+  };
+  src.connect(sp);sp.connect(mute);mute.connect(ctx.destination);
+  cm('Listening… keep quiet, devices close, speakers on.');
+  calibInfo=null;
+  ws.send(JSON.stringify({t:'tx',a:'calib',at:srvNow()+1500}));
+  await sleep(400);
+  const info=calibInfo;
+  if(!info){cm('No answer from the server. Try again.');ms.getTracks().forEach(t=>t.stop());return}
+  const n=info.ids.length;
+  await sleep(1500+ROUNDS*n*SLOT+800);
+  ms.getTracks().forEach(t=>t.stop());sp.disconnect();src.disconnect();mute.disconnect();
+  const all=new Float32Array(total);let o=0;for(const c of chunks){all.set(c,o);o+=c.length}
+  const sr=ctx.sampleRate,E=info.ids.map(()=>[]);
+  for(let r=0;r<ROUNDS;r++)for(let k=0;k<n;k++){
+    const T=info.at+(r*n+k)*SLOT;
+    const g=Math.round((T-offset-R0)/1000*sr);
+    const a=Math.max(0,g-Math.round(.4*sr)),b=Math.min(all.length,g+Math.round(1*sr));
+    let peak=0;for(let i=a;i<b;i++){const v=Math.abs(all[i]);if(v>peak)peak=v}
+    if(peak<.03)continue;
+    let i=a;while(i<b&&Math.abs(all[i])<.35*peak)i++;
+    E[k].push(i/sr*1000-T);
+  }
+  if(!E[0].length){cm('The host could not hear its own click. Turn the volume up and try again.');return}
+  const base=median(E[0]),d=[0],heard=[0];
+  for(let k=1;k<n;k++){if(E[k].length){d[k]=median(E[k])-base;heard.push(k)}else d[k]=null}
+  const lo=Math.min(...heard.map(k=>d[k]));
+  const out={};let txt=[];
+  heard.forEach(k=>{const v=Math.round(d[k]-lo);out[info.ids[k]]=v;txt.push(v+' ms')});
+  const missing=n-heard.length;
+  ws.send(JSON.stringify({t:'tx',a:'setlat',ms:out}));
+  cm('Calibrated '+heard.length+' device(s): '+txt.join(', ')+(missing?'. '+missing+' not heard: move closer and retry.':'. Tap Play test clicks to check.'));
+}
 
 // ---------- sharing stems through the server (host uploads, others download) ----------
 const MB=1048576;
@@ -302,7 +376,7 @@ $('#save').onclick=async()=>{
   }
   const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;document.body.appendChild(a);a.click();a.remove();
 };
-try{const v=+localStorage.getItem('bs-lat');if(v){latency=v;$('#lat').value=v;$('#lv').textContent=v}}catch(e){}
+try{const v=+localStorage.getItem('bs-lat');if(v)setLat(v);const b=+localStorage.getItem('bs-bt');if(b){extra=b;$('#bt').value=b;$('#bv').textContent=b}}catch(e){}
 updateUI();
 </script>
 </body></html>
