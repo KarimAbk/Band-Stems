@@ -12,8 +12,8 @@ const clean = s => String(s || '').toLowerCase().replace(/[^a-z0-9_-]/g, '').sli
 const send = (ws, o) => ws.readyState === 1 && ws.send(JSON.stringify(o));
 const dir = r => path.join(TMP, r.code);
 const announce = r => r.clients.forEach(c => send(c, { t: 'peers', n: r.clients.size, host: !!r.host }));
-const stemsMsg = (r, sep) => ({ t: 'stems', v: r.v, sep: !!sep, files: r.published.map(f => ({ id: f.id, name: f.name, size: f.size })) });
-function wipe(r) { fs.rmSync(dir(r), { recursive: true, force: true }); r.pending = []; r.published = null; r.bytes = 0; }
+const stemsMsg = (r, sep) => ({ t: 'stems', v: r.v, sep: !!sep, names: r.names || null, files: r.published.map(f => ({ id: f.id, name: f.name, size: f.size })) });
+function wipe(r) { fs.rmSync(dir(r), { recursive: true, force: true }); r.pending = []; r.published = null; r.bytes = 0; r.names = null; }
 function catchUp(ws, r) {
   if (!r.state) return;
   if (r.state.playing) {
@@ -188,18 +188,27 @@ wss.on('connection', ws => {
     if (!isHost || !room) return;
 
     if (m.t === 'publish') {
-      room.published = room.pending; room.pending = []; room.v++;
+      room.published = room.pending; room.pending = []; room.v++; room.names = null;
       room.clients.forEach(c => c !== ws && send(c, stemsMsg(room)));
       return;
     }
 
     if (m.t === 'tx') {
-      let ids;
-      if (m.a === 'play') room.state = { playing: true, at: m.at, pos: m.pos };
+      let ids, names, bpm, beats;
+      if (m.a === 'play') {
+        room.state = { playing: true, at: m.at, pos: m.pos };
+        beats = Math.min(16, Math.max(0, Math.floor(+m.beats) || 0));
+        bpm = Math.min(300, Math.max(30, +m.bpm || 120));
+      }
       else if (m.a === 'pause' || m.a === 'seek') room.state = { playing: false, pos: m.pos };
       else if (m.a === 'calib') ids = [ws.cid, ...[...room.clients].filter(c => c !== ws).map(c => c.cid)];
+      else if (m.a === 'names') {
+        if (!Array.isArray(m.names)) return;
+        names = m.names.slice(0, 12).map(x => typeof x === 'string' ? x.slice(0, 24) : '');
+        room.names = names;
+      }
       else if (m.a !== 'click' && m.a !== 'setlat') return;
-      room.clients.forEach(c => send(c, { t: 'tx', a: m.a, at: m.at, pos: m.pos, ids, ms: m.ms }));
+      room.clients.forEach(c => send(c, { t: 'tx', a: m.a, at: m.at, pos: m.pos, ids, ms: m.ms, names, bpm, beats }));
     }
   });
 

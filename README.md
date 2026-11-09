@@ -24,3 +24,8 @@ Free instances sleep after ~15 minutes idle, so the first load can take up to a 
 
 ## Mac separator (optional)
 Set an environment variable SEPARATOR_KEY on the server (Render > Environment). Then run the separator from the band-stems-separator folder on your Mac (see its README.txt). The host gets a "Separate a song" button.
+
+## Extras
+- Count-in (4 or 8 beats at a chosen BPM), played in sync on every phone before the song starts.
+- Host can tap a stem name to rename it for everyone. Anyone can remove a stem from their own mixer with the cross.
+- The host's browser remembers the last song: "Load last song" re-shares it after the server restarts.
