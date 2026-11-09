@@ -12,7 +12,7 @@ const clean = s => String(s || '').toLowerCase().replace(/[^a-z0-9_-]/g, '').sli
 const send = (ws, o) => ws.readyState === 1 && ws.send(JSON.stringify(o));
 const dir = r => path.join(TMP, r.code);
 const announce = r => r.clients.forEach(c => send(c, { t: 'peers', n: r.clients.size, host: !!r.host }));
-const stemsMsg = r => ({ t: 'stems', v: r.v, files: r.published.map(f => ({ id: f.id, name: f.name, size: f.size })) });
+const stemsMsg = (r, sep) => ({ t: 'stems', v: r.v, sep: !!sep, files: r.published.map(f => ({ id: f.id, name: f.name, size: f.size })) });
 function wipe(r) { fs.rmSync(dir(r), { recursive: true, force: true }); r.pending = []; r.published = null; r.bytes = 0; }
 function catchUp(ws, r) {
   if (!r.state) return;
@@ -22,6 +22,34 @@ function catchUp(ws, r) {
   } else send(ws, { t: 'tx', a: 'seek', pos: r.state.pos });
 }
 
+// ---- Mac separator: the Mac polls this server, so nothing is exposed on the Mac ----
+const KEY = process.env.SEPARATOR_KEY || '';
+const JOBS = path.join(TMP, 'jobs'); fs.mkdirSync(JOBS, { recursive: true });
+const MB = 1024 * 1024;
+const jobs = new Map(), queue = [];
+let waiters = [], lastPoll = 0, lastOnline = false;
+const macOnline = () => !!KEY && (Date.now() - lastPoll < 45000 || [...jobs.values()].some(j => j.state === 'running'));
+const keyOk = req => { const a = Buffer.from(String(req.headers['x-key'] || '')), b = Buffer.from(KEY); return !!KEY && a.length === b.length && crypto.timingSafeEqual(a, b); };
+const sepNote = (r, o) => r.clients.forEach(c => send(c, { t: 'sep', ...o }));
+function dropJob(job) { jobs.delete(job.id); if (job.room.job === job) job.room.job = null; fs.rmSync(job.dir, { recursive: true, force: true }); }
+function dispatch() {
+  while (waiters.length && queue.length) {
+    const job = jobs.get(queue.shift());
+    if (!job) continue;
+    const w = waiters.shift(); clearTimeout(w.timer);
+    job.state = 'running';
+    w.res.writeHead(200, { 'Content-Type': 'application/json' });
+    w.res.end(JSON.stringify({ id: job.id, name: job.name }));
+    sepNote(job.room, { msg: 'Separating on the Mac…' });
+  }
+}
+function body(req, cb) { let s = ''; req.on('data', c => { if (s.length < 10000) s += c; }); req.on('end', () => { try { cb(JSON.parse(s || '{}')); } catch { cb({}); } }); }
+setInterval(() => {
+  const o = macOnline();
+  if (o !== lastOnline) { lastOnline = o; rooms.forEach(r => r.clients.forEach(c => send(c, { t: 'sepinfo', online: o }))); }
+  jobs.forEach(j => { if (Date.now() - j.started > 30 * 60 * 1000) { sepNote(j.room, { err: 'Timed out' }); dropJob(j); } });
+}, 5000);
+
 const server = http.createServer((req, res) => {
   const u = new URL(req.url, 'http://x');
   const parts = u.pathname.split('/').filter(Boolean);
@@ -29,6 +57,72 @@ const server = http.createServer((req, res) => {
   const authed = r && r.token && req.headers['x-token'] === r.token;
 
   if (u.pathname === '/health') { res.end('ok'); return; }
+
+  // Host uploads a song to be separated
+  if (parts[0] === 'separate' && req.method === 'POST') {
+    const fail = (c, m) => { res.writeHead(c); res.end(m); req.resume(); };
+    if (!KEY) return fail(503, 'Separation is not set up on this server');
+    if (!authed) return fail(403, 'Not the host');
+    if (!macOnline()) return fail(503, 'The Mac separator is offline');
+    if (r.job) return fail(409, 'A song is already being separated');
+    const len = +req.headers['content-length'] || 0;
+    if (!len || len > 60 * MB) return fail(413, 'Song must be under 60 MB');
+    const id = crypto.randomBytes(8).toString('hex'), jd = path.join(JOBS, id);
+    fs.mkdirSync(jd, { recursive: true });
+    const out = fs.createWriteStream(path.join(jd, 'input'));
+    req.pipe(out);
+    out.on('finish', () => {
+      const job = { id, room: r, name: decodeURIComponent(req.headers['x-name'] || 'song').slice(0, 120), state: 'queued', dir: jd, started: Date.now(), stems: [] };
+      wipe(r); jobs.set(id, job); r.job = job; queue.push(id);
+      sepNote(r, { msg: 'Song received. Waiting for the Mac…' });
+      dispatch();
+      res.writeHead(202); res.end('ok');
+    });
+    req.on('aborted', () => { out.destroy(); fs.rmSync(jd, { recursive: true, force: true }); });
+    return;
+  }
+
+  // Calls from the Mac
+  if (parts[0] === 'sep') {
+    if (!keyOk(req)) { res.writeHead(403); res.end('Wrong key, or SEPARATOR_KEY is not set on the server'); req.resume(); return; }
+    lastPoll = Date.now();
+    if (parts[1] === 'next') {
+      const w = { res };
+      w.timer = setTimeout(() => { waiters = waiters.filter(x => x !== w); lastPoll = Date.now(); res.writeHead(204); res.end(); }, 25000);
+      res.on('close', () => { clearTimeout(w.timer); waiters = waiters.filter(x => x !== w); });
+      waiters.push(w); dispatch(); return;
+    }
+    const job = jobs.get(parts[2]);
+    if (!job) { res.writeHead(410); res.end('Job gone'); req.resume(); return; }
+    const jr = job.room;
+    if (parts[1] === 'input') {
+      const fp = path.join(job.dir, 'input');
+      res.writeHead(200, { 'Content-Length': fs.statSync(fp).size });
+      fs.createReadStream(fp).pipe(res); return;
+    }
+    if (parts[1] === 'status') { body(req, b => { sepNote(jr, { msg: String(b.msg || '').slice(0, 120) }); res.end('ok'); }); return; }
+    if (parts[1] === 'result') {
+      const len = +req.headers['content-length'] || 0;
+      if (rooms.get(jr.code) !== jr || !len || jr.bytes + len > LIMIT) { res.writeHead(413); res.end(); req.resume(); return; }
+      const fid = crypto.randomBytes(8).toString('hex'), name = clean(u.searchParams.get('name')) || 'stem';
+      fs.mkdirSync(dir(jr), { recursive: true });
+      jr.bytes += len;
+      const out = fs.createWriteStream(path.join(dir(jr), fid));
+      req.pipe(out);
+      out.on('finish', () => { job.stems.push({ id: fid, name, size: len, type: 'audio/mpeg' }); res.end('ok'); });
+      return;
+    }
+    if (parts[1] === 'done') {
+      req.resume();
+      if (rooms.get(jr.code) === jr && job.stems.length) {
+        jr.published = job.stems; jr.pending = []; jr.v++;
+        jr.clients.forEach(c => send(c, stemsMsg(jr, true)));
+      } else sepNote(jr, { err: 'No stems came back' });
+      dropJob(job); res.end('ok'); return;
+    }
+    if (parts[1] === 'fail') { body(req, b => { sepNote(jr, { err: String(b.msg || 'Unknown error').slice(0, 200) }); dropJob(job); res.end('ok'); }); return; }
+    res.writeHead(404); res.end(); return;
+  }
 
   if (parts[0] === 'clear' && req.method === 'POST') {
     if (!authed) { res.writeHead(403); res.end(); return; }
@@ -83,7 +177,7 @@ wss.on('connection', ws => {
       }
       ws.cid = (r.nextId = (r.nextId || 0) + 1);
       room = r; r.clients.add(ws);
-      send(ws, { t: 'joined', host: isHost, code, cid: ws.cid, token: isHost ? r.token : undefined });
+      send(ws, { t: 'joined', host: isHost, code, cid: ws.cid, sep: macOnline(), token: isHost ? r.token : undefined });
       if (!isHost) { if (r.published) send(ws, stemsMsg(r)); catchUp(ws, r); }
       announce(r);
       return;
@@ -113,7 +207,7 @@ wss.on('connection', ws => {
     if (!room) return;
     room.clients.delete(ws);
     if (room.host === ws) room.host = null;
-    if (!room.clients.size) { wipe(room); rooms.delete(room.code); } else announce(room);
+    if (!room.clients.size) { if (room.job) dropJob(room.job); wipe(room); rooms.delete(room.code); } else announce(room);
   });
 });
 

@@ -40,6 +40,12 @@ video{width:100%;border-radius:10px;background:#000;max-height:260px}
   <div class="mu" id="sync" style="margin-top:6px">Use a long, unguessable room code: anyone who knows it can join.</div>
 </div>
 
+<div class="card" id="sepcard" style="display:none">
+  <div class="row" id="sepctl"><button id="sepbtn" disabled>Separate a song</button><span class="mu">Host: pick one song (up to 60 MB, mp3 is best). The Mac splits it into 4 stems for everyone.</span></div>
+  <input type="file" id="sepfile" accept="audio/*,.mp3,.wav,.m4a,.flac" style="display:none">
+  <div class="mu" id="sepmsg" style="margin-top:6px"></div>
+</div>
+
 <div class="card">
   <div class="row"><button class="p" id="play" disabled>Play</button><button id="pause" disabled>Pause</button><span class="mu" id="time">0:00 / 0:00</span></div>
   <input type="range" id="seek" min="0" max="1000" value="0" disabled>
@@ -182,7 +188,25 @@ function relat(){if(playing)startAt(Date.now()+50,curPos())}
 $('#lat').oninput=e=>{setLat(+e.target.value);relat()};
 $('#bt').oninput=e=>{extra=+e.target.value;$('#bv').textContent=extra;try{localStorage.setItem('bs-bt',extra)}catch(x){}relat()};
 $('#cal').onclick=calibrate;
+let sepOnline=false,sepBusy=false;
+function sepUI(){
+  $('#sepcard').style.display=joined?'':'none';
+  $('#sepctl').style.display=(joined&&isHost)?'':'none';
+  $('#sepbtn').disabled=!sepOnline||sepBusy;
+  if(!sepBusy)$('#sepmsg').textContent=sepOnline?'The Mac separator is online.':'The Mac separator is offline: start it on the Mac to use this.';
+}
+$('#sepbtn').onclick=()=>{ensureCtx();$('#sepfile').click()};
+$('#sepfile').onchange=async e=>{
+  const f=e.target.files[0];e.target.value='';if(!f)return;
+  if(f.size>60*1048576){$('#sepmsg').textContent='That file is over 60 MB. Convert it to mp3 first.';return}
+  sepBusy=true;sepUI();$('#sepmsg').textContent='Uploading the song…';
+  try{
+    const r=await fetch('/separate?room='+code,{method:'POST',headers:{'x-token':token,'x-name':encodeURIComponent(f.name),'Content-Type':f.type||'application/octet-stream'},body:f});
+    if(!r.ok)throw new Error(await r.text()||r.status);
+  }catch(err){sepBusy=false;sepUI();$('#sepmsg').textContent='Could not start: '+err.message}
+};
 function updateUI(){
+  sepUI();
   const has=stems.length>0,c=canCtl();
   $('#play').disabled=!has||!c||playing;$('#pause').disabled=!has||!c||!playing;$('#seek').disabled=!has||!c;
   $('#cal').style.display=(joined&&isHost)?'':'none';
@@ -212,7 +236,9 @@ function open(){
       $('#sync').textContent='Clock synced (round trip '+b.rtt+' ms)';
     }else if(m.t==='tx')handle(m);
     else if(m.t==='stems')loadRemote(m);
-    else if(m.t==='joined'){joined=true;myCid=m.cid;if(m.host){token=m.token;share()}$('#rmsg').textContent=(m.host?'Hosting ':'Joined ')+m.code;updateUI()}
+    else if(m.t==='sep'){if(m.err){sepBusy=false;sepUI();$('#sepmsg').textContent='Separation failed: '+m.err}else{sepBusy=true;sepUI();$('#sepmsg').textContent=m.msg}}
+    else if(m.t==='sepinfo'){sepOnline=m.online;sepUI()}
+    else if(m.t==='joined'){joined=true;myCid=m.cid;sepOnline=!!m.sep;if(m.host){token=m.token;share()}$('#rmsg').textContent=(m.host?'Hosting ':'Joined ')+m.code;updateUI()}
     else if(m.t==='peers')$('#rmsg').textContent=(isHost?'Hosting ':'Joined ')+code+' · '+m.n+' here'+(m.host?'':' · no host yet');
   };
   ws.onclose=()=>{
@@ -327,7 +353,8 @@ async function share(){
   }
 }
 async function loadRemote(msg){
-  if(isHost||msg.v===stemsV)return;
+  if((isHost&&!msg.sep)||msg.v===stemsV)return;
+  if(msg.sep){hostFiles=[];needUpload=false}
   stemsV=msg.v;ensureCtx();stop();playing=false;
   const next=[];
   try{
@@ -344,7 +371,8 @@ async function loadRemote(msg){
   }catch(e){stemsV=-1;$('#lmsg').textContent='Download failed. Ask the host to load the stems again.';return}
   stems.forEach(s=>s.gain.disconnect());stems=next;
   dur=Math.max(...stems.map(s=>s.buf.duration));startPos=0;playing=false;
-  $('#lmsg').textContent=stems.length+' stems received from the host';
+  $('#lmsg').textContent=stems.length+(isHost?' stems ready (separated on the Mac)':' stems received from the host');
+  if(msg.sep){sepBusy=false;sepUI();$('#sepmsg').textContent='Done: '+stems.length+' stems ready.'}
   renderMixer();updateUI();
   if(ws&&ws.readyState===1)ws.send(JSON.stringify({t:'catchup'}));
 }

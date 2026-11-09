@@ -21,3 +21,6 @@ Free instances sleep after ~15 minutes idle, so the first load can take up to a 
 - Everyone: open the link, tap Load stems, pick the same files.
 - Host: type a long room code, tap Host. Others: same code, tap Join.
 - Only the host sees Play/Pause/seek. Rejoining as Host in the same room takes over hosting.
+
+## Mac separator (optional)
+Set an environment variable SEPARATOR_KEY on the server (Render > Environment). Then run the separator from the band-stems-separator folder on your Mac (see its README.txt). The host gets a "Separate a song" button.
