@@ -42,6 +42,7 @@ video{width:100%;border-radius:10px;background:#000;max-height:260px}
 
 <div class="card" id="sepcard" style="display:none">
   <div class="row" id="sepctl"><button id="sepbtn" disabled>Separate a song</button><span class="mu">Host: pick one song (up to 60 MB, mp3 is best). The Mac splits it into 4 stems for everyone.</span></div>
+  <div class="row" id="ytctl" style="margin-top:8px"><input type="text" id="ytlink" placeholder="Or paste a YouTube link" style="flex:1;min-width:0"><button id="ytbtn" disabled>Separate link</button></div>
   <input type="file" id="sepfile" accept="audio/*,.mp3,.wav,.m4a,.flac" style="display:none">
   <div class="mu" id="sepmsg" style="margin-top:6px"></div>
 </div>
@@ -234,9 +235,20 @@ function sepUI(){
   $('#sepcard').style.display=joined?'':'none';
   $('#sepctl').style.display=(joined&&isHost)?'':'none';
   $('#sepbtn').disabled=!sepOnline||sepBusy;
+  $('#ytctl').style.display=(joined&&isHost)?'':'none';
+  $('#ytbtn').disabled=!sepOnline||sepBusy;
   if(!sepBusy)$('#sepmsg').textContent=sepOnline?'The Mac separator is online.':'The Mac separator is offline: start it on the Mac to use this.';
 }
 $('#sepbtn').onclick=()=>{ensureCtx();$('#sepfile').click()};
+$('#ytbtn').onclick=async()=>{
+  const link=$('#ytlink').value.trim();if(!link)return;
+  ensureCtx();sepBusy=true;sepUI();$('#sepmsg').textContent='Sending the link…';
+  try{
+    const r=await fetch('/separate-url?room='+code,{method:'POST',headers:{'x-token':token,'Content-Type':'application/json'},body:JSON.stringify({url:link})});
+    if(!r.ok)throw new Error(await r.text()||r.status);
+    $('#ytlink').value='';
+  }catch(err){sepBusy=false;sepUI();$('#sepmsg').textContent='Could not start: '+err.message}
+};
 $('#sepfile').onchange=async e=>{
   const f=e.target.files[0];e.target.value='';if(!f)return;
   if(f.size>60*1048576){$('#sepmsg').textContent='That file is over 60 MB. Convert it to mp3 first.';return}

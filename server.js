@@ -39,7 +39,7 @@ function dispatch() {
     const w = waiters.shift(); clearTimeout(w.timer);
     job.state = 'running';
     w.res.writeHead(200, { 'Content-Type': 'application/json' });
-    w.res.end(JSON.stringify({ id: job.id, name: job.name }));
+    w.res.end(JSON.stringify({ id: job.id, name: job.name, url: job.url }));
     sepNote(job.room, { msg: 'Separating on the Mac…' });
   }
 }
@@ -79,6 +79,28 @@ const server = http.createServer((req, res) => {
       res.writeHead(202); res.end('ok');
     });
     req.on('aborted', () => { out.destroy(); fs.rmSync(jd, { recursive: true, force: true }); });
+    return;
+  }
+
+  // Host sends a YouTube link instead of a file: the Mac downloads and separates it
+  if (parts[0] === 'separate-url' && req.method === 'POST') {
+    const fail = (c, m) => { res.writeHead(c); res.end(m); req.resume(); };
+    if (!KEY) return fail(503, 'Separation is not set up on this server');
+    if (!authed) return fail(403, 'Not the host');
+    if (!macOnline()) return fail(503, 'The Mac separator is offline');
+    if (r.job) return fail(409, 'A song is already being separated');
+    body(req, b => {
+      const okUrl = s => { try { const x = new URL(s); return /^https?:$/.test(x.protocol) && /^(www\.|m\.|music\.)?(youtube\.com|youtu\.be)$/.test(x.hostname); } catch { return false; } };
+      const link = String(b.url || '').trim().slice(0, 300);
+      if (!okUrl(link)) { res.writeHead(400); res.end('That is not a YouTube link'); return; }
+      const id = crypto.randomBytes(8).toString('hex'), jd = path.join(JOBS, id);
+      fs.mkdirSync(jd, { recursive: true });
+      const job = { id, room: r, name: 'YouTube', url: link, state: 'queued', dir: jd, started: Date.now(), stems: [] };
+      wipe(r); jobs.set(id, job); r.job = job; queue.push(id);
+      sepNote(r, { msg: 'Link received. Waiting for the Mac…' });
+      dispatch();
+      res.writeHead(202); res.end('ok');
+    });
     return;
   }
 
