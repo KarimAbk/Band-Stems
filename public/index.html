@@ -415,6 +415,7 @@ async function calibrate(){
 
 // ---------- sharing stems through the server (host uploads, others download) ----------
 const MB=1048576;
+async function put(url,opts){try{return await fetch(url,opts)}catch(e){await sleep(1500);return await fetch(url,opts)}}
 async function share(){
   if(!joined||!isHost||!needUpload||!hostFiles.length)return;
   needUpload=false;
@@ -424,19 +425,21 @@ async function share(){
   if(big){$('#lmsg').textContent=big.name+' is over 95 MB, so not shared. Compress it (mp3 or m4a).';return}
   try{
     $('#lmsg').textContent='Sharing with the room…';
-    let r=await fetch('/clear?room='+code,{method:'POST',headers:{'x-token':token}});
+    let r=await put('/clear?room='+code,{method:'POST',headers:{'x-token':token}});
     if(!r.ok)throw new Error(r.status);
     for(let i=0;i<hostFiles.length;i++){
       const f=hostFiles[i];
       $('#lmsg').textContent='Sharing '+(i+1)+'/'+hostFiles.length+'…';
-      r=await fetch('/upload?room='+code,{method:'POST',headers:{'x-token':token,'x-name':encodeURIComponent(f.name),'Content-Type':f.type||'application/octet-stream'},body:f});
+      const data=await f.arrayBuffer(); // read into memory: files restored from the browser cache can fail to upload directly
+      r=await put('/upload?room='+code,{method:'POST',headers:{'x-token':token,'x-name':encodeURIComponent(f.name),'Content-Type':f.type||'application/octet-stream'},body:data});
       if(!r.ok)throw new Error(r.status);
     }
     ws.send(JSON.stringify({t:'publish'}));
     $('#lmsg').textContent=stems.length+' stems loaded and shared with the room';
   }catch(e){
     needUpload=true;
-    $('#lmsg').textContent='Sharing failed ('+(e.message==='413'?'over the room limit':'check your connection')+'). Load the stems again to retry.';
+    const why=e.message==='413'?'over the room limit':/^\d+$/.test(e.message)?'server said '+e.message:'network problem: '+(e.message||e.name);
+    $('#lmsg').textContent='Sharing failed ('+why+'). Tap Load last song to try again.';
   }
 }
 async function loadRemote(msg){
