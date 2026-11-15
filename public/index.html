@@ -6,7 +6,11 @@
 <style>
 :root{--bg:#121212;--card:#1a1a1a;--tx:#e6e6e6;--mu:#7d7d7d;--ac:#ececec;--bd:#2c2c2c;--on:#111;color-scheme:dark;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
 *{box-sizing:border-box}
-html,body{background:var(--bg)}
+html{background:var(--bg)}
+body{background:transparent}
+body::before{content:'';position:fixed;inset:-25%;z-index:-1;pointer-events:none;background:var(--bg-img,none);animation:drift 55s ease-in-out infinite alternate;will-change:transform}
+@keyframes drift{from{transform:translate3d(-3%,-2%,0) scale(1)}to{transform:translate3d(3%,2%,0) scale(1.08)}}
+@media (prefers-reduced-motion:reduce){body::before{animation:none}}
 body{margin:0;color:var(--tx);font:15px/1.5 -apple-system,BlinkMacSystemFont,"Inter","Segoe UI",system-ui,sans-serif;-webkit-font-smoothing:antialiased}
 main{max-width:520px;margin:0 auto;padding:22px 18px 70px}
 h1{font-size:12px;font-weight:500;letter-spacing:.28em;text-transform:uppercase;color:var(--mu);margin:6px 0 26px}
@@ -15,13 +19,16 @@ main>.card:first-of-type{border-top:0;padding-top:4px}
 .card[data-label]::before{content:attr(data-label);display:block;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--mu);margin-bottom:12px}
 .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 button,input[type=text],select,input[type=number]{font:inherit;font-size:14px;color:var(--tx);background:transparent;border:1px solid var(--bd);border-radius:999px;padding:8px 15px;outline:none}
+button{background:linear-gradient(#444,#363636);border-color:#4d4d4d;box-shadow:0 4px 12px rgba(0,0,0,.55),0 1px 2px rgba(0,0,0,.6),inset 0 1px 0 rgba(255,255,255,.07)}
 input[type=text],select,input[type=number]{background:var(--card);border-radius:10px}
 input:focus,select:focus{border-color:#5a5a5a}
 button{cursor:pointer;transition:border-color .15s,background .15s}
-button:hover:not(:disabled){border-color:#5a5a5a}
-button.p{background:var(--ac);color:var(--on);border-color:var(--ac);font-weight:500}
-button.on{background:var(--tx);color:var(--on);border-color:var(--tx)}
-button:disabled{opacity:.3;cursor:default}
+button:hover:not(:disabled){background:linear-gradient(#4d4d4d,#3d3d3d);border-color:#666}
+button:active:not(:disabled){transform:translateY(1px);box-shadow:0 1px 4px rgba(0,0,0,.6),inset 0 1px 2px rgba(0,0,0,.35)}
+button.p{background:linear-gradient(#dcdcdc,#bcbcbc);color:#151515;border-color:#d8d8d8;font-weight:500}
+button.p:hover:not(:disabled){background:linear-gradient(#e6e6e6,#c8c8c8);border-color:#eee}
+button.on{background:linear-gradient(#cfcfcf,#aeaeae);color:#151515;border-color:#d0d0d0;box-shadow:0 2px 8px rgba(0,0,0,.5),inset 0 1px 2px rgba(0,0,0,.2)}
+button:disabled{opacity:.35;cursor:default;box-shadow:none}
 input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:2px;background:#383838;border-radius:2px;margin:15px 0;outline:none}
 input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;height:16px;border-radius:50%;background:var(--tx);border:0}
 input[type=range]::-moz-range-thumb{width:16px;height:16px;border-radius:50%;background:var(--tx);border:0}
@@ -88,6 +95,17 @@ video{width:100%;border-radius:12px;background:#000;max-height:260px}
 </div>
 </main>
 <script>
+// soft random blue and white background glow, different on every visit
+(function(){
+  const r=(a,b)=>a+Math.random()*(b-a);
+  const cols=[[70,120,200],[110,160,240],[90,140,220],[255,255,255],[220,235,255]];
+  const g=[];
+  for(let i=0;i<6;i++){
+    const c=cols[Math.floor(Math.random()*cols.length)],white=c[0]>=220,a=white?r(.05,.09):r(.12,.2);
+    g.push('radial-gradient('+r(35,60).toFixed(0)+'% '+r(30,55).toFixed(0)+'% at '+r(0,100).toFixed(0)+'% '+r(0,100).toFixed(0)+'%, rgba('+c.join(',')+','+a.toFixed(3)+'), transparent 70%)');
+  }
+  document.documentElement.style.setProperty('--bg-img',g.join(','));
+})();
 const $=s=>document.querySelector(s);
 let ctx,stems=[],playing=false,startCtx=0,startPos=0,dur=0,latency=0,keep;
 let myCid=-1,calibInfo=null,extra=0;
