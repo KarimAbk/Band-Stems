@@ -68,6 +68,7 @@ video{width:100%;border-radius:10px;background:#000;max-height:260px}
 
 <div class="card">
   <video id="cam" playsinline muted></video>
+  <div class="row" style="margin-top:8px"><button id="camfront">Front</button><button id="camback">Back</button><select id="camsel" style="flex:1;min-width:0"><option value="">Camera / lens</option></select></div>
   <div class="row" style="margin-top:8px">
     <button id="cambtn">Start camera</button><button class="p" id="rec" disabled>Record</button><button id="save" disabled>Save video</button>
   </div>
@@ -437,12 +438,31 @@ async function loadRemote(msg){
 
 // ---------- camera + mic recording ----------
 let stream,mr,chunks=[],blob=null;
-$('#cambtn').onclick=async()=>{
+let camId='',camFacing='user';
+async function listCams(){
   try{
-    stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'user'},audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false}});
-    $('#cam').srcObject=stream;$('#cam').play();$('#rec').disabled=false;$('#cambtn').disabled=true;
-  }catch(e){$('#recmsg').textContent='Camera or mic permission was denied (this needs https).'}
-};
+    const devs=(await navigator.mediaDevices.enumerateDevices()).filter(d=>d.kind==='videoinput');
+    const vt=stream&&stream.getVideoTracks()[0],cur=vt&&vt.getSettings().deviceId;
+    const sel=$('#camsel');sel.innerHTML='';
+    devs.forEach((d,i)=>{const o=document.createElement('option');o.value=d.deviceId;o.textContent=d.label||('Camera '+(i+1));if(d.deviceId===cur)o.selected=true;sel.appendChild(o)});
+  }catch(e){}
+}
+async function openCam(){
+  if(mr&&mr.state==='recording'){$('#recmsg').textContent='Stop recording before switching camera.';return}
+  if(stream)stream.getTracks().forEach(t=>t.stop());
+  const video=camId?{deviceId:{exact:camId}}:{facingMode:camFacing};
+  try{
+    stream=await navigator.mediaDevices.getUserMedia({video,audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false}});
+    $('#cam').srcObject=stream;$('#cam').play();$('#rec').disabled=false;$('#cambtn').textContent='Restart camera';
+    $('#camfront').classList.toggle('on',!camId&&camFacing==='user');$('#camback').classList.toggle('on',!camId&&camFacing==='environment');
+    $('#recmsg').textContent='Records only your camera and mic, not the backing track. Use headphones.';
+    listCams();
+  }catch(e){$('#recmsg').textContent='Could not open that camera (permission denied, or it needs https).'}
+}
+$('#cambtn').onclick=openCam;
+$('#camfront').onclick=()=>{camId='';camFacing='user';openCam()};
+$('#camback').onclick=()=>{camId='';camFacing='environment';openCam()};
+$('#camsel').onchange=e=>{if(e.target.value){camId=e.target.value;openCam()}};
 $('#rec').onclick=()=>{
   if(mr&&mr.state==='recording'){mr.stop();return}
   const mime=['video/mp4','video/webm;codecs=vp9,opus','video/webm'].find(t=>window.MediaRecorder&&MediaRecorder.isTypeSupported(t))||'';
