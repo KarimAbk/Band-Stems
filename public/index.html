@@ -48,7 +48,7 @@ video{width:100%;border-radius:12px;background:#000;max-height:260px}
 <body><main>
 <h1>Band Stems</h1>
 
-<div class="card" data-label="Song">
+<div class="card" id="songcard" data-label="Song">
   <div class="row"><button id="lastbtn" style="display:none">Load last song</button><span class="mu" id="lmsg">Host: paste a YouTube link in the Separate section to load a song.</span></div>
   <input type="file" id="file" accept="audio/*,.mp3,.wav,.m4a,.aac,.ogg,.flac,.webm" multiple>
 </div>
@@ -109,7 +109,7 @@ video{width:100%;border-radius:12px;background:#000;max-height:260px}
 })();
 const $=s=>document.querySelector(s);
 let ctx,stems=[],playing=false,startCtx=0,startPos=0,dur=0,latency=0,keep;
-let myCid=-1,calibInfo=null,extra=0;
+let myCid=-1,calibInfo=null,extra=0,songNote=false;
 const lat=()=>(latency+extra)/1000;
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 let hostFiles=[],needUpload=false,token='',stemsV=-1;
@@ -272,7 +272,7 @@ async function cacheLoad(){try{const d=await idb();return await new Promise(ok=>
 
 $('#lastbtn').onclick=async()=>{ensureCtx();const f=await cacheLoad();if(f&&f.length)loadLocal(f)};
 function sepUI(){
-  $('#sepcard').style.display=joined?'':'none';
+  $('#sepcard').style.display=(joined&&(isHost||sepBusy))?'':'none';
   $('#ytctl').style.display=(joined&&isHost)?'':'none';
   $('#ytbtn').disabled=!sepOnline||sepBusy;
   if(!sepBusy)$('#sepmsg').textContent=sepOnline?'The Mac separator is online.':'The Mac separator is offline: start it on the Mac to use this.';
@@ -288,6 +288,10 @@ $('#ytbtn').onclick=async()=>{
 };
 function updateUI(){
   sepUI();
+  // joined (non-host) devices only show what matters: hide idle song/separator notes, room status and Host/Join
+  $('#songcard').style.display=(joined&&!isHost&&!songNote)?'none':'';
+  $('#rmsg').style.display=(joined&&!isHost)?'none':'';
+  $('#jh').style.display=$('#jf').style.display=joined?'none':'';
   const has=stems.length>0,c=canCtl();
   $('#play').disabled=!has||!c||playing;$('#pause').disabled=!has||!c||!playing;$('#seek').disabled=!has||!c;
   $('#cal').style.display=(joined&&isHost)?'':'none';
@@ -326,7 +330,7 @@ function open(){
   };
   ws.onclose=()=>{
     if(!code)return;
-    $('#rmsg').textContent='Reconnecting…';
+    $('#sync').textContent='Reconnecting…';$('#rmsg').textContent='Reconnecting…';
     setTimeout(open,2000);
   };
 }
@@ -438,7 +442,7 @@ async function share(){
 async function loadRemote(msg){
   if((isHost&&!msg.sep)||msg.v===stemsV)return;
   if(msg.sep){hostFiles=[];needUpload=false}
-  stemsV=msg.v;ensureCtx();stop();playing=false;
+  stemsV=msg.v;ensureCtx();stop();playing=false;songNote=true;updateUI();
   const next=[],keepFiles=[];
   try{
     for(let i=0;i<msg.files.length;i++){
@@ -452,8 +456,8 @@ async function loadRemote(msg){
       const gain=ctx.createGain();gain.connect(ctx.destination);
       next.push({name:f.name.replace(/\.[^.]+$/,''),buf,gain,idx:next.length,vol:1,mute:false,solo:false,src:null});
     }
-  }catch(e){stemsV=-1;$('#lmsg').textContent='Download failed. Ask the host to load the stems again.';return}
-  stems.forEach(s=>s.gain.disconnect());stems=next;
+  }catch(e){stemsV=-1;$('#lmsg').textContent='Download failed. Ask the host to load the stems again.';updateUI();return}
+  songNote=false;stems.forEach(s=>s.gain.disconnect());stems=next;
   dur=Math.max(...stems.map(s=>s.buf.duration));startPos=0;playing=false;
   $('#lmsg').textContent=stems.length+(isHost?' stems ready (separated on the Mac)':' stems received from the host');
   if(msg.names)applyNames(msg.names);
