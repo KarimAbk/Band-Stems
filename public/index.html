@@ -49,6 +49,20 @@ b{font-weight:500}
 .stem .x{padding:5px 9px;color:var(--mu)}
 video{width:100%;border-radius:12px;background:#000;max-height:36dvh}
 #file{display:none}
+.card{position:relative}
+.info{position:absolute;top:6px;right:0;width:28px;height:28px;padding:0;border-radius:50%;font:italic 15px/1 Georgia,serif;display:flex;align-items:center;justify-content:center}
+.infobox{display:none;position:absolute;top:42px;left:0;right:0;z-index:5;background:#1b1b1d;border:1px solid #3a3a3a;border-radius:12px;padding:12px 14px;font-size:13px;line-height:1.5;color:#b5b5b5;box-shadow:0 12px 30px rgba(0,0,0,.65)}
+.infobox.open{display:block}
+.infobox p{margin:0 0 8px}.infobox p:last-child{margin:0}
+.infobox b{color:var(--tx)}
+button.big{display:block;margin:14px auto 20px;width:104px;height:104px;border-radius:50%;padding:0 0 10px;font-size:36px;line-height:1;letter-spacing:.08em;color:#fff;background:linear-gradient(160deg,#9cc8ff 0%,#4f8cee 52%,#2a5cc4 100%);border-color:#86b4ff;box-shadow:0 10px 26px rgba(0,0,0,.65),0 2px 4px rgba(0,0,0,.6),0 0 30px rgba(80,140,255,.28),inset 0 1px 0 rgba(255,255,255,.35)}
+button.big:hover:not(:disabled){background:linear-gradient(160deg,#aed3ff 0%,#5f9aff 52%,#3468d4 100%);border-color:#a8cbff}
+button.big:active:not(:disabled){transform:translateY(1px) scale(.98)}
+.srow{display:flex;align-items:center;gap:12px;margin:4px 0}
+.srow input[type=range]{flex:1;min-width:0}
+.chip{flex:none;width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:600;background:rgba(255,255,255,.08);border:1px solid var(--bd);color:var(--tx)}
+.val{flex:none;width:64px;text-align:right;font-size:13px;color:var(--mu)}
+.val b{color:var(--tx);font-weight:500}
 </style></head>
 <body><main>
 <h1>Band Stems</h1>
@@ -82,14 +96,18 @@ video{width:100%;border-radius:12px;background:#000;max-height:36dvh}
 <div class="card" id="mixer" data-label="Mixer" data-tab="mixer"><span class="mu">Your mixer appears here after you load stems. Levels are only for you.</span></div>
 
 <div class="card" data-label="Sync" data-tab="sync">
-  <div>Device delay: <b id="lv">0</b> ms</div>
-  <input type="range" id="lat" min="0" max="500" step="1" value="0">
-  <div class="row" style="margin-top:8px"><button id="clk">Play test clicks</button><span class="mu" id="clkmsg">Host only: everyone hears 8 clicks together</span></div>
-  <div class="mu">Device delay: set automatically by the host’s Auto-calibrate, or by hand. Remembered on this device.</div>
-  <div class="row" style="margin-top:8px"><button class="p" id="cal">Auto-calibrate</button><span class="mu" id="calmsg">Host only: devices close together, speakers on, quiet room</span></div>
-  <div style="margin-top:10px">Bluetooth extra delay: <b id="bv">0</b> ms</div>
-  <input type="range" id="bt" min="0" max="400" step="1" value="0">
-  <div class="mu">Only if you wear Bluetooth headphones: raise this until you play in time. Wired headphones need nothing.</div>
+  <button class="info" id="info" aria-label="Information">i</button>
+  <div class="infobox" id="infobox">
+    <p><b>•••</b> plays 8 test clicks on every device (host only). On the device that sounds late, raise <b>D</b> until the clicks line up.</p>
+    <p><b>D</b> device delay: set automatically by Auto-calibrate, or by hand. Remembered on this device.</p>
+    <p><b>B</b> Bluetooth extra delay: only if you wear Bluetooth headphones. Raise it until you play in time. Wired headphones need nothing.</p>
+    <p><b>Auto-calibrate</b> (host): put all devices close together, speakers on, headphones off, in a quiet room.</p>
+  </div>
+  <button class="big" id="clk" aria-label="Play test clicks" title="Play test clicks">•••</button>
+  <div class="srow"><span class="chip" title="Device delay">D</span><input type="range" id="lat" min="0" max="500" step="1" value="0"><span class="val"><b id="lv">0</b> ms</span></div>
+  <div class="srow"><span class="chip" title="Bluetooth extra delay">B</span><input type="range" id="bt" min="0" max="400" step="1" value="0"><span class="val"><b id="bv">0</b> ms</span></div>
+  <div class="row" style="margin-top:12px;justify-content:center"><button class="p" id="cal">Auto-calibrate</button></div>
+  <div class="mu" id="calmsg" style="text-align:center;margin-top:8px"></div>
 </div>
 
 <div class="card" data-label="Camera" data-tab="cam">
@@ -305,7 +323,7 @@ function updateUI(){
   $('#cal').style.display=(joined&&isHost)?'':'none';
   $('#cinrow').style.display=c?'':'none';
   $('#lastbtn').style.display=(hasCache&&c)?'':'none';
-  $('#clk').style.display=c?'':'none';$('#clkmsg').style.display=c?'':'none';
+  $('#clk').style.display=c?'':'none';
   $('#play').style.display=c?'':'none';$('#pause').style.display=c?'':'none';
 }
 setInterval(()=>{
@@ -525,9 +543,11 @@ $('#save').onclick=async()=>{
   const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;document.body.appendChild(a);a.click();a.remove();
 };
 try{const v=+localStorage.getItem('bs-lat');if(v)setLat(v);const b=+localStorage.getItem('bs-bt');if(b){extra=b;$('#bt').value=b;$('#bv').textContent=b}}catch(e){}
-function setTab(t){document.body.dataset.tab=t;document.querySelectorAll('#tabs button').forEach(b=>b.classList.toggle('act',b.dataset.t===t))}
+function setTab(t){$('#infobox').classList.remove('open');document.body.dataset.tab=t;document.querySelectorAll('#tabs button').forEach(b=>b.classList.toggle('act',b.dataset.t===t))}
 document.querySelectorAll('#tabs button').forEach(b=>b.onclick=()=>setTab(b.dataset.t));
 setTab('room');
+$('#info').onclick=e=>{e.stopPropagation();$('#infobox').classList.toggle('open')};
+$('#infobox').onclick=()=>$('#infobox').classList.remove('open');
 updateUI();
 cacheLoad().then(f=>{if(f&&f.length){hasCache=true;updateUI()}});
 </script>
